@@ -18,20 +18,22 @@ cd "$(
 #fonts color
 Green="\033[32m"
 Red="\033[31m"
-# Yellow="\033[33m"
+#Yellow="\033[33m"
 GreenBG="\033[42;37m"
 RedBG="\033[41;37m"
+YellowBG="\033[43;37m"
 Font="\033[0m"
 
 #notification information
 # Info="${Green}[信息]${Font}"
 OK="${Green}[OK]${Font}"
 Error="${Red}[错误]${Font}"
+Warning="${Red}[警告]${Font}"
 
 # 版本
-shell_version="1.1.5.7"
+shell_version="1.1.6.16"
 shell_mode="None"
-github_branch="master"
+github_branch="dev"
 version_cmp="/tmp/version_cmp.tmp"
 v2ray_conf_dir="/etc/v2ray"
 nginx_conf_dir="/etc/nginx/conf/conf.d"
@@ -158,6 +160,13 @@ dependency_install() {
     ${INS} install wget git lsof -y
 
     if [[ "${ID}" == "centos" ]]; then
+        ${INS} -y install iputils
+    else
+        ${INS} -y install iputils-ping
+    fi
+    judge "安装 iputils-ping"
+
+    if [[ "${ID}" == "centos" ]]; then
         ${INS} -y install crontabs
     else
         ${INS} -y install cron
@@ -241,6 +250,19 @@ port_alterid_set() {
         [[ -z ${alterID} ]] && alterID="2"
     fi
 }
+port_set(){
+    if [[ "on" != "$old_config_status" ]]; then
+        read -rp "请输入连接端口（default:443）:" port
+        [[ -z ${port} ]] && port="443"
+    fi
+}
+alterid_set() {
+    if [[ "on" != "$old_config_status" ]]; then
+        read -rp "请输入alterID（default:2 仅允许填数字）:" alterID
+        [[ -z ${alterID} ]] && alterID="2"
+    fi
+}
+
 modify_path() {
     if [[ "on" == "$old_config_status" ]]; then
         camouflage="$(grep '\"path\"' $v2ray_qr_config_file | awk -F '"' '{print $4}')"
@@ -249,13 +271,17 @@ modify_path() {
     judge "V2ray 伪装路径 修改"
 }
 modify_alterid() {
-    if [[ "on" == "$old_config_status" ]]; then
-        alterID="$(grep '\"aid\"' $v2ray_qr_config_file | awk -F '"' '{print $4}')"
+    if [[ $(grep -ic 'VLESS' ${v2ray_conf}) == 0 ]]; then
+        if [[ "on" == "$old_config_status" ]]; then
+            alterID="$(grep '\"aid\"' $v2ray_qr_config_file | awk -F '"' '{print $4}')"
+        fi
+        sed -i "/\"alterId\"/c \\\t  \"alterId\":${alterID}" ${v2ray_conf}
+        judge "V2ray alterid 修改"
+        [ -f ${v2ray_qr_config_file} ] && sed -i "/\"aid\"/c \\  \"aid\": \"${alterID}\"," ${v2ray_qr_config_file}
+        echo -e "${OK} ${GreenBG} alterID:${alterID} ${Font}"
+    else
+        echo -e "${Warning} ${YellowBG} VLESS 不支持修改 alterid ${Font}"
     fi
-    sed -i "/\"alterId\"/c \\\t  \"alterId\":${alterID}" ${v2ray_conf}
-    judge "V2ray alterid 修改"
-    [ -f ${v2ray_qr_config_file} ] && sed -i "/\"aid\"/c \\  \"aid\": \"${alterID}\"," ${v2ray_qr_config_file}
-    echo -e "${OK} ${GreenBG} alterID:${alterID} ${Font}"
 }
 modify_inbound_port() {
     if [[ "on" == "$old_config_status" ]]; then
@@ -263,9 +289,11 @@ modify_inbound_port() {
     fi
     if [[ "$shell_mode" != "h2" ]]; then
         PORT=$((RANDOM + 10000))
-        sed -i "/\"port\"/c  \    \"port\":${PORT}," ${v2ray_conf}
+#        sed -i "/\"port\"/c  \    \"port\":${PORT}," ${v2ray_conf}
+        sed -i "9c \    \"port\":${PORT}," ${v2ray_conf}
     else
-        sed -i "/\"port\"/c  \    \"port\":${port}," ${v2ray_conf}
+#        sed -i "/\"port\"/c  \    \"port\":${port}," ${v2ray_conf}
+        sed -i "8c \    \"port\":${port}," ${v2ray_conf}
     fi
     judge "V2ray inbound_port 修改"
 }
@@ -318,7 +346,7 @@ v2ray_install() {
     if [[ -f v2ray.sh ]]; then
         rm -rf $v2ray_systemd_file
         systemctl daemon-reload
-        bash v2ray.sh --force
+        bash v2ray.sh --force && systemctl daemon-reload
         judge "安装 V2ray"
     else
         echo -e "${Error} ${RedBG} V2ray 安装文件下载失败，请检查下载地址是否可用 ${Font}"
@@ -490,7 +518,7 @@ acme() {
 }
 v2ray_conf_add_tls() {
     cd /etc/v2ray || exit
-    wget --no-check-certificate https://raw.githubusercontent.com/wulabing/V2Ray_ws-tls_bash_onekey/${github_branch}/tls/config.json -O config.json
+    wget --no-check-certificate https://raw.githubusercontent.com/wulabing/V2Ray_ws-tls_bash_onekey/${github_branch}/VLESS_tls/config.json -O config.json
     modify_path
     modify_alterid
     modify_inbound_port
@@ -498,7 +526,7 @@ v2ray_conf_add_tls() {
 }
 v2ray_conf_add_h2() {
     cd /etc/v2ray || exit
-    wget --no-check-certificate https://raw.githubusercontent.com/wulabing/V2Ray_ws-tls_bash_onekey/${github_branch}/http2/config.json -O config.json
+    wget --no-check-certificate https://raw.githubusercontent.com/wulabing/V2Ray_ws-tls_bash_onekey/${github_branch}/VLESS_h2/config.json -O config.json
     modify_path
     modify_alterid
     modify_inbound_port
@@ -667,11 +695,12 @@ EOF
 
 vmess_qr_link_image() {
     vmess_link="vmess://$(base64 -w 0 $v2ray_qr_config_file)"
-    {
-        echo -e "$Red 二维码: $Font"
-        echo -n "${vmess_link}" | qrencode -o - -t utf8
-        echo -e "${Red} URL导入链接:${vmess_link} ${Font}"
-    } >>"${v2ray_info_file}"
+    echo -e "${OK} ${GreenBG} VLESS 目前无分享链接规范 请手动复制粘贴配置信息至客户端 ${Font}"
+#    {
+#        echo -e "$Red 二维码: $Font"
+#        echo -n "${vmess_link}" | qrencode -o - -t utf8
+#        echo -e "${Red} URL导入链接:${vmess_link} ${Font}"
+#    } >>"${v2ray_info_file}"
 }
 
 vmess_quan_link_image() {
@@ -679,11 +708,12 @@ vmess_quan_link_image() {
     $(info_extraction '\"port\"'), chacha20-ietf-poly1305, "\"$(info_extraction '\"id\"')\"", over-tls=true, \
     certificate=1, obfs=ws, obfs-path="\"$(info_extraction '\"path\"')\"", " > /tmp/vmess_quan.tmp
     vmess_link="vmess://$(base64 -w 0 /tmp/vmess_quan.tmp)"
-    {
-        echo -e "$Red 二维码: $Font"
-        echo -n "${vmess_link}" | qrencode -o - -t utf8
-        echo -e "${Red} URL导入链接:${vmess_link} ${Font}"
-    } >>"${v2ray_info_file}"
+    echo -e "${OK} ${GreenBG} VLESS 目前无分享链接规范 请手动复制粘贴配置信息至客户端 ${Font}"
+#    {
+#        echo -e "$Red 二维码: $Font"
+#        echo -n "${vmess_link}" | qrencode -o - -t utf8
+#        echo -e "${Red} URL导入链接:${vmess_link} ${Font}"
+#    } >>"${v2ray_info_file}"
 }
 
 vmess_link_image_choice() {
@@ -705,13 +735,17 @@ info_extraction() {
 }
 basic_information() {
     {
-        echo -e "${OK} ${GreenBG} V2ray+ws+tls 安装成功"
+        echo -e "${OK} ${GreenBG} V2ray+ws+tls 安装成功 ${Font}"
         echo -e "${Red} V2ray 配置信息 ${Font}"
         echo -e "${Red} 地址（address）:${Font} $(info_extraction '\"add\"') "
         echo -e "${Red} 端口（port）：${Font} $(info_extraction '\"port\"') "
         echo -e "${Red} 用户id（UUID）：${Font} $(info_extraction '\"id\"')"
-        echo -e "${Red} 额外id（alterId）：${Font} $(info_extraction '\"aid\"')"
-        echo -e "${Red} 加密方式（security）：${Font} 自适应 "
+
+        if [[ $(grep -ic 'VLESS' ${v2ray_conf}) == 0 ]]; then
+            echo -e "${Red} 额外id（alterId）：${Font} $(info_extraction '\"aid\"')"
+        fi
+
+        echo -e "${Red} 加密（encryption）：${Font} none "
         echo -e "${Red} 传输协议（network）：${Font} $(info_extraction '\"net\"') "
         echo -e "${Red} 伪装类型（type）：${Font} none "
         echo -e "${Red} 路径（不要落下/）：${Font} $(info_extraction '\"path\"') "
@@ -812,7 +846,7 @@ bbr_boost_sh() {
     wget -N --no-check-certificate "https://raw.githubusercontent.com/ylx2016/Linux-NetSpeed/master/tcp.sh" && chmod +x tcp.sh && ./tcp.sh
 }
 mtproxy_sh() {
-    echo -e "${Error} ${RedBG} 功能维护，暂不可用 ${Font}"
+    wget -N --no-check-certificate "https://github.com/whunt1/onekeymakemtg/raw/master/mtproxy_go.sh" && chmod +x mtproxy_go.sh && bash mtproxy_go.sh
 }
 
 uninstall_all() {
@@ -855,12 +889,12 @@ judge_mode() {
 install_v2ray_ws_tls() {
     is_root
     check_system
-    chrony_install
+#    chrony_install
     dependency_install
     basic_optimization
     domain_check
     old_config_exist_check
-    port_alterid_set
+    port_set
     v2ray_install
     port_exist_check 80
     port_exist_check "${port}"
@@ -882,12 +916,12 @@ install_v2ray_ws_tls() {
 install_v2_h2() {
     is_root
     check_system
-    chrony_install
+#    chrony_install
     dependency_install
     basic_optimization
     domain_check
     old_config_exist_check
-    port_alterid_set
+    port_set
     v2ray_install
     port_exist_check 80
     port_exist_check "${port}"
@@ -956,8 +990,8 @@ menu() {
 
     echo -e "—————————————— 安装向导 ——————————————"""
     echo -e "${Green}0.${Font}  升级 脚本"
-    echo -e "${Green}1.${Font}  安装 V2Ray (Nginx+ws+tls)"
-    echo -e "${Green}2.${Font}  安装 V2Ray (http/2)"
+    echo -e "${Green}1.${Font}  安装 V2Ray (VLESS+Nginx+ws+tls)"
+    echo -e "${Green}2.${Font}  安装 V2Ray (VLESS+http/2+Fallback)"
     echo -e "${Green}3.${Font}  升级 V2Ray core"
     echo -e "—————————————— 配置变更 ——————————————"
     echo -e "${Green}4.${Font}  变更 UUID"
